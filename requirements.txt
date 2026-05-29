@@ -1,0 +1,30 @@
+#platform
+Databricks
+
+# Data Processing & Analysis
+pyspark
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Data Validation & Quality
+great-expectations>=0.18.0
+
+# Date & Time Utilities
+python-dateutil>=2.8.2
+
+# Database & Connectivity
+sqlalchemy>=2.0.0
+pyodbc>=5.0.0
+
+# Visualization (if needed in notebooks)
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.14.0
+
+# Utilities
+pyyaml>=6.0
+requests>=2.31.0
+
+# Testing (optional)
+pytest>=7.4.0
+pytest-cov>=4.1.0
