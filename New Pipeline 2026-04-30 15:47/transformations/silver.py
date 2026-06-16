@@ -34,10 +34,10 @@ def is_valid_vin(vin_col):
 @dlt.expect("vin_not_null", "vin IS NOT NULL")
 def silver_sales_new():
 
-    sales   = dlt.read("bronze_sales_new")
-    customer = dlt.read("bronze_customer_new")
-    dealer  = dlt.read("bronze_dealer_new")
-    vehicle = dlt.read("bronze_vehicle_master_new")
+    sales   = dlt.read.table("bronze_sales_new")
+    customer = dlt.read.table("bronze_customer_new")
+    dealer  = dlt.read.table("bronze_dealer_new")
+    vehicle = dlt.read.table("bronze_vehicle_master_new")
 
     # PII mask on customer before join
     customer_masked = customer.select(
