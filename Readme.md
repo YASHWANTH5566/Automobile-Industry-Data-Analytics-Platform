@@ -1,563 +1,154 @@
-# 🚗 Automobile Industry Analytics Platform
+# 🚗 Automobile Industry Data Analytics Platform
 
-### Databricks Lakehouse | Delta Live Tables (DLT) | Medallion Architecture
-
-An end-to-end **Automobile Industry Analytics Platform** built on the **Databricks Lakehouse Architecture** using **Delta Live Tables (DLT)** and **PySpark Structured Streaming**.
-
-This project ingests raw automobile industry datasets from Amazon S3, processes them through a **Bronze → Silver → Gold** medallion architecture, and delivers business-ready KPI tables powering executive dashboards for:
-
-* Sales Analytics
-* Production Efficiency
-* Warranty & Service Insights
-* Dealer Performance Scorecards
-* Behavioral Anomaly Detection
+An end-to-end **Lakehouse Medallion Architecture** pipeline built on **Databricks**, covering ingestion, streaming transformations, dimensional modeling, and AI-generated business reporting — delivered straight to Slack every day.
 
 ---
 
-# 📌 Architecture Overview
+## 📌 Overview
 
-```text
-                ┌──────────────────────┐
-                │      Raw CSV Data     │
-                │      (Amazon S3)      │
-                └──────────┬───────────┘
-                           │
-                           ▼
-                 ┌──────────────────┐
-                 │  Bronze Layer     │
-                 │ Auto Loader (DLT) │
-                 └────────┬─────────┘
-                          │
-                          ▼
-                 ┌──────────────────┐
-                 │  Silver Layer     │
-                 │ Cleansing & QA    │
-                 └────────┬─────────┘
-                          │
-                          ▼
-                 ┌──────────────────┐
-                 │   Gold Layer      │
-                 │ KPI Aggregations  │
-                 └────────┬─────────┘
-                          │
-                          ▼
-               ┌────────────────────┐
-               │ BI Dashboards       │
-               │ Power BI / DBSQL    │
-               └────────────────────┘
+This platform ingests raw automobile industry data (sales, production, service, warranty, inventory, dealer and customer master data) and transforms it through **Bronze → Silver → Gold** layers using **Delta Live Tables (DLT)**. The Gold layer powers live dashboards, while a **Groq Llama-powered LLM job** reads the final aggregated KPIs every day and posts a plain-English business summary — complete with trend comparisons and anomaly detection — directly to **Slack**.
+
+> Built to simulate a real automotive OEM/dealer network analytics stack: 10 source domains, 25 upstream tables, 15+ downstream gold/dashboard tables, all orchestrated as a single Databricks Job.
+
+---
+
+## 🏗️ Architecture
+
+```
+                 ┌──────────────┐
+   Raw CSVs  ──▶ │   BRONZE     │  Auto Loader (cloudFiles) + Watermarking + CDC hash
+ (S3 landing)    └──────┬───────┘
+                        │
+                        ▼
+                 ┌──────────────┐
+                 │   SILVER     │  Cleansing • PII Masking • Dedup • SCD Type 2
+                 │              │  Enrichment via joins across domains
+                 └──────┬───────┘
+                        │
+                        ▼
+                 ┌──────────────┐
+                 │    GOLD      │  KPI aggregates • Anomaly detection (z-score)
+                 │              │  Daily trend comparison tables
+                 └──────┬───────┘
+                        │
+            ┌───────────┴────────────┐
+            ▼                        ▼
+   📊 BI Dashboards          🤖 LLM Daily Summary (Groq Llama)
+                                       │
+                                       ▼
+                                  💬 Slack Channel
+```
+
+**Orchestration:** One Databricks Job chains the DLT pipeline → Gold KPI computation → LLM summary generation → Slack delivery, fully automated end to end.
+
+---
+
+## 🧱 Medallion Layers
+
+### 🥉 Bronze — Raw Ingestion
+- Streaming ingestion via **Auto Loader** (`cloudFiles`) from S3 landing zones across **10 source domains**: customer, dealer, dealer_parts, inventory, parts, production, sales, service, vehicle_master, warranty
+- **Watermarking** applied on event-time columns (`sale_date`, `production_date`, `service_date`, `claim_date`) to bound state and handle late-arriving data — 3-day threshold for transactional tables, 7-day for master data
+- **CDC change detection** via SHA-256 row hashing of tracked attributes — enables efficient downstream change tracking without a native CDC feed
+
+### 🥈 Silver — Cleansed & Conformed
+- Deduplication, null-key filtering, VIN format validation
+- **PII masking** — email hashed (SHA-256), phone numbers partially masked
+- Standardization: casing, trimming, date typing
+- Cross-domain enrichment via joins (sales ⨝ customer ⨝ dealer ⨝ vehicle)
+- **SCD Type 2** dimension tracking for `customer`, `dealer`, and `vehicle_master` using DLT's native `apply_changes()` API — full historical versioning with `is_current` / `__START_AT` / `__END_AT` tracking
+- Data quality enforced via DLT `@dlt.expect` constraints
+
+### 🥇 Gold — Business KPIs
+- `gold_sales_performance` — monthly units, revenue, discount %, channel mix
+- `gold_production_efficiency` — completion rate, delay rate, throughput by plant/shift
+- `gold_warranty_claims` — claim approval rates, claim value by part/model/dealer
+- `gold_dealer_scorecard` — composite weighted performance score (revenue, feedback, warranty, inventory) with tiering (Platinum/Gold/Silver/Bronze)
+- `gold_warranty_anomaly_behavioral` & `gold_discount_anomaly_behavioral` — z-score based behavioral anomaly detection
+- `gold_daily_comparison` & `gold_daily_anomaly_summary` — day-over-day trend deltas and rolling 30-day anomaly flags, purpose-built to feed the LLM reporting layer
+
+---
+
+## 🤖 LLM-Powered Daily Business Summary
+
+A scheduled Databricks job reads the Gold layer and generates a natural-language report using **Groq's Llama 3 70B**:
+
+- **Trend comparison** — today vs. yesterday across sales, production, service, warranty, and inventory, with % change indicators
+- **Anomaly detection** — flags statistically significant deviations (|z-score| > 2) against a rolling 30-day baseline, narrated in plain English with recommended actions
+- **Dealer performance** — top/bottom 5 dealers by composite score
+- **Delivery** — formatted with Slack Block Kit and posted directly to a dedicated channel
+- **Audit logging** — every run logs token usage and delivery status to a Delta audit table
+
+📷 *Sample Slack output:*
+
+> **Daily Automobile Business Summary**
+> Executive Summary, Sales, Production, Service, Warranty, Inventory breakdowns, ⚠️ Anomalies section, and Recommended Actions — generated fresh every day.
+
+---
+
+## ⚙️ Orchestration
+
+Everything runs as a single **Databricks Job** with task-level dependencies:
+
+```
+ETL_pipeline (DLT)
+   └── Data_Transformation_silver_layer
+          ├── gold_kpis_for_dashboards ──▶ Analysis_dashboards_for_gold_kpis
+          └── daily_summary_for_reporting ──▶ generate_report_using_LLM_send_update_to_slack
+```
+
+- **25 upstream tables, 15+ downstream tables** tracked via Databricks Unity Catalog lineage
+- Fully serverless compute
+- Performance-optimized job clusters
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Ingestion | Databricks Auto Loader (cloudFiles), S3 |
+| Transformation | PySpark, Delta Live Tables (DLT) |
+| Storage | Delta Lake |
+| Orchestration | Databricks Jobs & Pipelines |
+| Data Quality | DLT Expectations (`@dlt.expect`) |
+| Change Tracking | SCD Type 2 (`apply_changes`), SHA-256 CDC hashing |
+| LLM Reporting | Groq API (Llama 3 70B) |
+| Delivery | Slack Block Kit (Incoming Webhooks) |
+| Governance | Unity Catalog (lineage tracking) |
+
+---
+
+## 📂 Repository Structure
+
+```
+├── bronze.py                  # Auto Loader ingestion + watermarking + CDC hashing
+├── silver.py                  # Cleansing, PII masking, SCD Type 2, enrichment
+├── gold.py                    # KPI aggregation + behavioral anomaly detection
+├── gold_daily_summary.py      # Daily trend comparison + rolling anomaly tables
+├── llm_summariser.py          # Groq Llama summary generation + Slack delivery
+└── README.md
 ```
 
 ---
 
-# 🏗️ Tech Stack
+## 🚀 Key Highlights
 
-| Technology              | Purpose                     |
-| ----------------------- | --------------------------- |
-| Databricks              | Unified Analytics Platform  |
-| Delta Live Tables (DLT) | Declarative ETL Pipelines   |
-| PySpark                 | Distributed Data Processing |
-| Structured Streaming    | Real-time ingestion         |
-| Amazon S3               | Data Lake Storage           |
-| Delta Lake              | ACID Lakehouse Storage      |
-| Power BI / Tableau      | Dashboarding & BI           |
-| Unity Catalog           | Governance & Security       |
+- ✅ Fully streaming medallion architecture on Delta Live Tables
+- ✅ Production-grade **watermarking** for late-data handling
+- ✅ **SCD Type 2** historization on all dimension tables
+- ✅ **CDC-style change detection** without native database CDC feeds
+- ✅ **Z-score based statistical anomaly detection** across 4 business domains
+- ✅ **LLM-generated executive reporting**, delivered automatically to Slack
+- ✅ End-to-end orchestration with full lineage visibility in Unity Catalog
 
 ---
 
-# 📂 Project Structure
+## 📬 Connect
 
-```text
-automobile-analytics-platform/
-│
-├── bronze_layer.py
-├── silver_layer.py
-├── gold_layer.py
-├── dashboards/
-│   ├── sales_dashboard.md
-│   ├── production_dashboard.md
-│   ├── warranty_dashboard.md
-│   └── dealer_scorecard_dashboard.md
-│
-├── architecture/
-│   └── medallion_architecture.png
-│
-├── README.md
-└── requirements.txt
-```
+Built as a hands-on deep dive into modern Lakehouse architecture, streaming ETL, and LLM-powered analytics delivery.
+
+🔗 LinkedIn: `https://www.linkedin.com/in/sai-manikanta-yashwanth-munagala-aab208352/`
 
 ---
 
-# 🥉 Bronze Layer – Raw Data Ingestion
-
-The Bronze Layer ingests raw CSV files from S3 using:
-
-* Databricks Auto Loader (`cloudFiles`)
-* Structured Streaming
-* Schema Inference
-* Incremental Processing
-* Checkpointing
-
-## Source Tables
-
-| Table                     | Description                |
-| ------------------------- | -------------------------- |
-| bronze_customer_new       | Customer master            |
-| bronze_sales_new          | Vehicle sales transactions |
-| bronze_dealer_new         | Dealer information         |
-| bronze_inventory_new      | Inventory stock            |
-| bronze_parts_new          | Spare parts master         |
-| bronze_production_new     | Production records         |
-| bronze_service_new        | Service transactions       |
-| bronze_vehicle_master_new | Vehicle specifications     |
-| bronze_warranty_new       | Warranty claims            |
-| bronze_dealer_parts_new   | Dealer parts inventory     |
-
----
-
-# 🥈 Silver Layer – Cleansing & Enrichment
-
-The Silver Layer performs:
-
-## ✅ Data Quality Operations
-
-* Deduplication
-* Null validation
-* VIN validation
-* Type casting
-* Standardization
-* Data enrichment
-* Derived KPI columns
-
-## 🔒 PII Masking
-
-Sensitive customer data is protected using:
-
-* SHA256 hashing for emails
-* Contact masking
-* Controlled PII exposure
-
-## 🔄 Business Transformations
-
-Examples:
-
-* Net Revenue Calculation
-* Warranty Flags
-* Inventory Health Indicators
-* Production Completion Flags
-* Dealer Enrichment
-* Vehicle Enrichment
-
----
-
-# 🥇 Gold Layer – Business KPI Tables
-
-The Gold Layer contains business-ready analytical tables optimized for BI dashboards.
-
----
-
-## 1️⃣ Gold Sales Performance
-
-### Table:
-
-`gold_sales_performance`
-
-### KPIs
-
-* Units Sold
-* Gross Revenue
-* Net Revenue
-* Discount %
-* Revenue Per Unit
-* Active Dealers
-* Unique Customers
-
-### Business Use Cases
-
-* Revenue trend analysis
-* Regional sales monitoring
-* Fuel type demand analysis
-* Channel performance
-
----
-
-## 2️⃣ Gold Production Efficiency
-
-### Table:
-
-`gold_production_efficiency`
-
-### KPIs
-
-* Total Units Produced
-* Completion Rate %
-* Delay Rate %
-* Average Production Time
-* Shift Efficiency
-* Plant Throughput
-
-### Business Use Cases
-
-* Manufacturing optimization
-* Bottleneck detection
-* Shift-level monitoring
-* Plant benchmarking
-
----
-
-## 3️⃣ Gold Warranty Claims
-
-### Table:
-
-`gold_warranty_claims`
-
-### KPIs
-
-* Total Claims
-* Approval Rate %
-* Rejection Rate %
-* Claim Amount
-* Part Failure Trends
-* Service Satisfaction
-
-### Business Use Cases
-
-* Warranty cost optimization
-* Quality issue detection
-* Dealer warranty analysis
-* Parts reliability tracking
-
----
-
-## 4️⃣ Gold Dealer Scorecard
-
-### Table:
-
-`gold_dealer_scorecard`
-
-### KPIs
-
-* Composite Dealer Score
-* Revenue Performance
-* Service Feedback
-* Inventory Health
-* Warranty Approval Rate
-* Dealer Tier Classification
-
-### Dealer Tiers
-
-| Tier     | Score |
-| -------- | ----- |
-| PLATINUM | ≥ 80  |
-| GOLD     | ≥ 60  |
-| SILVER   | ≥ 40  |
-| BRONZE   | < 40  |
-
-### Business Use Cases
-
-* Dealer ranking
-* Incentive programs
-* Regional dealer benchmarking
-* Supply chain optimization
-
----
-
-## 5️⃣ Behavioral Anomaly Detection
-
-### Tables
-
-* `gold_warranty_anomaly_behavioral`
-* `gold_discount_anomaly_behavioral`
-
-### Detection Logic
-
-Statistical anomaly detection using:
-
-* Historical dealer behavior
-* Z-score analysis
-* Claim rate deviation
-* Discount leakage detection
-
-### Example
-
-```python
-z_score = (current_rate - avg_rate) / stddev
-```
-
-Anomalies are flagged when:
-
-```text
-z_score > 2
-```
-
----
-
-# 📊 Dashboard Suite
-
----
-
-# 📈 Dashboard 1 – Sales Performance
-
-### Visualizations
-
-* KPI Summary Cards
-* Monthly Revenue Trend
-* Units Sold by Model
-* Revenue by Region
-* Channel & Payment Mix
-
-### Primary Users
-
-* Sales Teams
-* Finance
-* Marketing Leadership
-
----
-
-# 🏭 Dashboard 2 – Production Efficiency
-
-### Visualizations
-
-* Plant Throughput Trends
-* Completion vs Delay Rate
-* Shift Efficiency Heatmap
-* Production Time Analysis
-
-### Primary Users
-
-* Manufacturing
-* Operations
-* Plant Managers
-
----
-
-# 🛠️ Dashboard 3 – Warranty Claims Analytics
-
-### Visualizations
-
-* Claims Trend
-* Claims by Part Category
-* Dealer Warranty Performance
-* Approval Rate Gauges
-
-### Primary Users
-
-* Quality Teams
-* After-Sales
-* Warranty Operations
-
----
-
-# 🏆 Dashboard 4 – Dealer Scorecard
-
-### Visualizations
-
-* Dealer Ranking Leaderboard
-* Composite Score Radar Chart
-* Revenue vs Feedback Scatter
-* Inventory Health Heatmap
-
-### Primary Users
-
-* Dealer Management
-* Regional Managers
-* Executive Leadership
-
----
-
-# ⚡ Key Features
-
-## 🚀 Real-Time Streaming Ingestion
-
-Incremental ingestion using Databricks Auto Loader.
-
-## 🔒 Data Governance & Security
-
-PII masking and controlled access using Unity Catalog.
-
-## 📊 Business-Ready KPIs
-
-Curated Gold tables optimized for BI tools.
-
-## 🧠 Behavioral Analytics
-
-Statistical anomaly detection using z-score models.
-
-## 📈 Scalable Lakehouse Architecture
-
-Built on Delta Lake with ACID guarantees.
-
----
-
-# 🧪 Data Quality Expectations
-
-Implemented using DLT Expectations:
-
-```python
-@dlt.expect("valid_sale_amount", "sale_amount > 0")
-@dlt.expect("vin_not_null", "vin IS NOT NULL")
-```
-
-Examples:
-
-* Positive sales amount
-* Non-null VINs
-* Valid production time
-* Valid warranty claim amounts
-
----
-
-# 🔧 Optimization Strategies
-
-* Delta OPTIMIZE + ZORDER
-* Auto Optimize
-* Partition pruning
-* Materialized summaries
-* Cached aggregations
-
----
-
-# 🔐 Security & Governance
-
-* Unity Catalog Integration
-* Row-Level Security
-* PII Hashing & Masking
-* Audit Columns (`_processed_ts`)
-
----
-
-# 📅 Refresh Schedule
-
-| Dashboard             | Frequency |
-| --------------------- | --------- |
-| Sales Performance     | Daily     |
-| Production Efficiency | Daily     |
-| Warranty Claims       | Weekly    |
-| Dealer Scorecard      | Monthly   |
-
----
-
-# 📡 Alerting Rules
-
-| Condition                     | Action                  |
-| ----------------------------- | ----------------------- |
-| Delay Rate > 25%              | Slack Alert             |
-| Approval Rate < 50%           | Email Notification      |
-| Dealer Score Drop > 15%       | Dealer Manager Alert    |
-| Inventory Below Reorder > 60% | Supply Chain Escalation |
-
----
-
-# 🚀 Future Enhancements
-
-* ML-based demand forecasting
-* Predictive maintenance
-* Real-time IoT integration
-* Dealer churn prediction
-* Advanced anomaly detection with MLflow
-* Streaming dashboards
-
----
-
-# 📷 Suggested Dashboard Screenshots
-
-Add screenshots here:
-
-```text
-/docs/screenshots/
-```
-
-Recommended:
-
-* Sales Dashboard
-* Production Dashboard
-* Dealer Scorecard
-* Warranty Analytics
-
----
-
-# ▶️ How to Run
-
-## 1. Configure S3 Paths
-
-Update:
-
-```python
-.load("s3://automobile-pipeline/Raw/sales_new/")
-```
-
-with your own bucket paths.
-
----
-
-## 2. Create DLT Pipeline
-
-In Databricks:
-
-```text
-Workflows → Delta Live Tables → Create Pipeline
-```
-
-Attach:
-
-* Bronze notebook
-* Silver notebook
-* Gold notebook
-
----
-
-## 3. Run Pipeline
-
-Choose:
-
-```text
-Triggered or Continuous Mode
-```
-
----
-
-## 4. Connect BI Tool
-
-Use:
-
-* Databricks SQL Endpoint
-* Unity Catalog Gold Tables
-
-Example:
-
-```text
-Catalog : automobile
-Schema  : gold
-```
-
----
-
-# 📚 Learning Outcomes
-
-This project demonstrates:
-
-* Databricks Lakehouse Engineering
-* Streaming ETL Pipelines
-* Medallion Architecture
-* Data Modeling
-* Delta Live Tables
-* Data Quality Engineering
-* KPI Engineering
-* BI Dashboard Design
-* Data Governance
-* Scalable Analytics Architecture
-
----
-
-# 👨‍💻 Author
-
-### M. S. M. Yashwanth
-
-Data Engineer | Analytics Engineer | Lakehouse Enthusiast
-
----
-
-# 📜 License
-
-This project is licensed under the MIT License.
-
----
+*If you found this useful, feel free to ⭐ the repo or reach out — always happy to talk data engineering!*
